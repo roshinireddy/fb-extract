@@ -1,0 +1,160 @@
+package edu.iupui.soic.biohealth.fbextract;
+
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Multiset;
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.time.LocalDateTime;
+import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.*;
+import org.apache.http.entity.StringEntity;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+/**
+ *
+ * @author Roshini Reddy
+ */
+public class EmrAnalyzer {
+
+    private LinkedHashMap<String, String> providerMap = new LinkedHashMap<>();
+
+    public static void main(String[] args) throws Exception {
+        EmrAnalyzer emrAnalyzer = new EmrAnalyzer();
+        emrAnalyzer.executingMethods();
+    }
+
+    public void executingMethods() throws Exception {
+        List<String> givenname = EmrUtils.getNodesByTagName("id");
+        List<String> postauthor = (List) EmrUtils.getNodesByTagName("postauthor");
+        List<String> comauthor = (List) EmrUtils.getNodesByTagName("comauth");
+        Set<String> mySet = new HashSet(postauthor);
+        mySet.addAll(comauthor);
+        
+        List<String> authorName = new ArrayList(mySet);
+        for (int i = 0; i < authorName.size(); i++) {
+            String personUUID = createPerson(authorName.get(i));
+            String providerUUID = createProvider(personUUID);
+            providerMap.put((String) authorName.get(i), personUUID);
+        }
+
+        List<String> lList = EmrUtils.getNodesByTagName("post");
+        for (int j = 0; j < lList.size(); j++) {
+            String patientpersonUUID = createPatientPerson(givenname.get(j));
+            String patientUUID = createPatient(patientpersonUUID);
+            createVisit(givenname.get(j), patientUUID);
+        }
+    }
+
+    public String createPerson(String authorName) throws UnsupportedEncodingException, IOException {
+
+        JSONObject prefferedName = new JSONObject();
+        prefferedName.put("givenName", authorName);
+        prefferedName.put("middleName", "A");
+        prefferedName.put("familyName", "Provider");
+
+        JSONObject personJson = new JSONObject();
+        personJson.put("gender", "M");
+        personJson.put("names", new JSONArray().put(prefferedName));
+
+        String uuid = EmrUtils.postToUrl(EmrUtils.PERSON_URL, new StringEntity(personJson.toString()));
+        return uuid;
+    }
+
+    public String createProvider(String personUUID) throws IOException, Exception {
+
+        JSONObject providerJson = new JSONObject();
+        providerJson.put("person", personUUID);
+        providerJson.put("identifier", EmrUtils.generateIdentifier());
+
+        String uuid = EmrUtils.postToUrl(EmrUtils.PROVIDER_URL, new StringEntity(providerJson.toString()));
+        return uuid;
+    }
+
+    public String createPatientPerson(String givenname) throws UnsupportedEncodingException, IOException {
+        JSONObject patientName = new JSONObject();
+        patientName.put("givenName", givenname);
+        patientName.put("middleName", "A");
+        patientName.put("familyName", "Patient");
+
+        JSONObject personJson = new JSONObject();
+        personJson.put("gender", "M");
+        personJson.put("names", new JSONArray().put(patientName));
+       
+
+        String uuid = EmrUtils.postToUrl(EmrUtils.PERSON_URL, new StringEntity(personJson.toString()));
+        return uuid;
+    }
+
+    public String createPatient(String personUUID) throws Exception {
+
+        JSONObject identifiers = new JSONObject();
+        identifiers.put("identifier", EmrUtils.generateIdentifier());
+        identifiers.put("identifierType", "05a29f94-c0ed-11e2-94be-8c13b969e334");
+        identifiers.put("location", "8d6c993e-c2cc-11de-8d13-0010c6dffd0f");
+
+        JSONObject patientJson = new JSONObject();
+        patientJson.put("person", personUUID);
+        patientJson.put("identifiers", new JSONArray().put(identifiers));
+      
+
+        String uuid = EmrUtils.postToUrl(EmrUtils.PATIENT_URL, new StringEntity(patientJson.toString()));
+        return uuid;
+    }
+
+    public String createVisit(String givenName, String patientUUID) throws UnsupportedEncodingException, Exception {
+        Multimap<String, String> postauthorMap = EmrUtils.getChildNodesByTagNames(givenName, "postauthor");
+        Map.Entry<String, String> next = providerMap.entrySet().iterator().next();
+        JSONArray obsArray = new JSONArray();
+        JSONArray encountersArray = new JSONArray();
+
+        JSONObject encounter = new JSONObject();
+        encounter.put("patient", patientUUID);
+        encounter.put("encounterDatetime", LocalDateTime.now());
+        encounter.put("encounterType", "d7151f82-c1f3-4152-a605-2f9ea7414a79");
+        encounter.put("form","c75f120a-04ec-11e3-8780-2b40bef9a44b");
+        encounter.put("provider", providerMap.get(next.getKey()));
+        JSONObject obs = new JSONObject();
+        obs.put("concept", "162169AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+        obs.put("obsDatetime", LocalDateTime.now());
+        obs.put("value", postauthorMap.values().toArray()[0]);
+        obsArray.put(obs);
+        encounter.put("obs",obsArray );
+        encountersArray.put(encounter);
+
+         Multimap<String, String> commentMap = EmrUtils.getChildNodesByTagNames(givenName, "comment");
+        
+          for (String key : commentMap.keySet()) {
+            for (String value : commentMap.get(key)) {
+                JSONObject obs1 = new JSONObject();	
+                JSONArray obsArray1 = new JSONArray();
+                JSONObject encounters = new JSONObject();
+                encounters.put("patient", patientUUID);
+                encounters.put("encounterDatetime", LocalDateTime.now());
+                encounters.put("encounterType", "d7151f82-c1f3-4152-a605-2f9ea7414a79");
+                encounter.put("form","c75f120a-04ec-11e3-8780-2b40bef9a44b");
+                encounters.put("provider", providerMap.get(key));
+                obs1.put("concept", "162169AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+                obs1.put("obsDatetime", LocalDateTime.now());
+                obs1.put("value", value);
+                obsArray1.put(obs1);
+                encounters.put("obs",obsArray1);
+                encountersArray.put(encounters);
+            }
+         }
+         
+        JSONObject visitJson = new JSONObject();
+        visitJson.put("patient", patientUUID);
+        visitJson.put("visitType", "7b0f5697-27e3-40c4-8bae-f4049abfb4ed");
+        visitJson.put("startDatetime", LocalDateTime.now());
+        visitJson.put("stopDatetime", LocalDateTime.now());
+        visitJson.put("encounters", encountersArray);
+          System.out.println("json ="+ visitJson);
+
+        String response = EmrUtils.postToUrl(EmrUtils.VISIT_URL, new StringEntity(visitJson.toString()));
+        return response;
+    }
+
+}
