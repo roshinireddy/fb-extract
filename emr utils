@@ -1,0 +1,188 @@
+package edu.iupui.soic.biohealth.fbextract;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Properties;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.StatusLine;
+import org.apache.http.auth.AuthenticationException;
+import org.apache.http.auth.UsernamePasswordCredentials;
+import org.apache.http.client.ClientProtocolException;
+import org.apache.http.client.ResponseHandler;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.auth.BasicScheme;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.util.EntityUtils;
+import org.json.JSONObject;
+import org.w3c.dom.Document;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.SAXException;
+
+/**
+ *
+ * @author Roshini Reddy
+ */
+public class EmrUtils {
+
+    public static final String BASE_URL = "https://gw151.iu.xsede.org:443/openmrs/ws/rest/v1";
+    public static final String PERSON_URL = BASE_URL + "/person";
+    public static final String PATIENT_URL = BASE_URL + "/patient";
+    public static final String PROVIDER_URL = BASE_URL + "/provider";
+    public static final String VISIT_URL = BASE_URL + "/visit";
+
+    /**
+     * Returns a List of content inside tags that are passed as tag names
+     *
+     * @param tags
+     * @return
+     */
+    public static List getNodesByTagName(String... tags) {
+        File fXmlFile = new File("C:\\project.fml");
+        DocumentBuilderFactory documentbuilderFactory = DocumentBuilderFactory.newInstance();
+        ArrayList<String> content = new ArrayList<>();
+        try {
+            for (String tag : tags) {
+                DocumentBuilder documentBuilder = documentbuilderFactory.newDocumentBuilder();
+                Document document = documentBuilder.parse(fXmlFile);
+                NodeList nList = document.getElementsByTagName(tag);
+                for (int i = 0; i < nList.getLength(); i++) {
+                    Node node = nList.item(i);
+                    content.add(node.getTextContent());
+                }
+            }
+        } catch (ParserConfigurationException | SAXException | IOException ex) {
+            Logger.getLogger(EmrUtils.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        return content;
+    }
+
+    /**
+     * Adds Basic Authentication Header by reading from C:\socialemranalyzer.properties
+     * and adds Content-Type and Accept to application/json
+     * 
+     * @param httpPost
+     * @return
+     */
+    public static HttpPost addAuthMimeTypeHeader(HttpPost httpPost) {
+        try {
+            FileInputStream fis = new FileInputStream("C:\\socialemranalyzer.properties");
+            Properties p = new Properties();
+            p.load(fis);
+
+            UsernamePasswordCredentials creds = new UsernamePasswordCredentials(p.getProperty("username"), p.getProperty("password"));
+            httpPost.addHeader(new BasicScheme().authenticate(creds, httpPost, null));
+            httpPost.addHeader("Content-Type", "application/json");
+            httpPost.addHeader("Accept", "application/json");
+        } catch (AuthenticationException | IOException ex) {
+            Logger.getLogger(EmrUtils.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        return httpPost;
+    }
+    
+    public static String postToUrl(String URL, StringEntity entity) throws IOException {
+        
+        CloseableHttpClient client = HttpClients.createDefault();
+        HttpPost httpPost = EmrUtils.addAuthMimeTypeHeader(new HttpPost(URL));
+
+        ResponseHandler<String> rh = new ResponseHandler() {
+
+            @Override
+            public String handleResponse(HttpResponse response) throws ClientProtocolException, IOException {
+                String uuid = new String();
+                StatusLine statusLine = response.getStatusLine();
+                HttpEntity entity = response.getEntity();
+                System.out.println("Status code: " + statusLine.getStatusCode());
+                if (entity == null) {
+                    throw new ClientProtocolException("Response contains no content");
+                } else if (statusLine.getStatusCode() >= 300) {
+                    String responseContent = EntityUtils.toString(entity);
+                    JSONObject json = new JSONObject(responseContent);
+                    System.out.println("error message = " + json.getJSONObject("error").getString("message"));
+                } else if (statusLine.getStatusCode() >= 200) {
+                    String responseContent = EntityUtils.toString(entity);
+                    JSONObject json = new JSONObject(responseContent);
+                    uuid = json.getString("uuid");
+                    System.out.println("uuid = " + uuid);
+                }
+                return uuid;
+            }
+        };
+        return client.execute(httpPost, rh);
+    }
+
+    public static String generateIdentifier() throws Exception {
+        String datetime = new SimpleDateFormat("yyyyMMddHHmmssSSS").format(new Date());
+        return datetime + '-' + checkDigit(datetime);
+    }
+
+    public static int checkDigit(String idWithoutCheckdigit) throws Exception {
+
+        // allowable characters within identifier
+        String validChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVYWXZ_";
+
+        // remove leading or trailing whitespace, convert to uppercase
+        idWithoutCheckdigit = idWithoutCheckdigit.trim().toUpperCase();
+
+        // this will be a running total
+        int sum = 0;
+
+        // loop through digits from right to left
+        for (int i = 0; i < idWithoutCheckdigit.length(); i++) {
+
+            // set ch to "current" character to be processed
+            char ch = idWithoutCheckdigit
+                    .charAt(idWithoutCheckdigit.length() - i - 1);
+
+            // throw exception for invalid characters
+            if (validChars.indexOf(ch) == -1) {
+                throw new Exception("\"" + ch + "\" is an invalid character");
+            }
+            // our "digit" is calculated using ASCII value - 48
+            int digit = (int) ch - 48;
+
+            // weight will be the current digit's contribution to
+            // the running total
+            int weight;
+            if (i % 2 == 0) {
+
+                // for alternating digits starting with the rightmost, we
+                // use our formula this is the same as multiplying x 2 and
+                // adding digits together for values 0 to 9.  Using the
+                // following formula allows us to gracefully calculate a
+                // weight for non-numeric "digits" as well (from their
+                // ASCII value - 48).
+                weight = (2 * digit) - (int) (digit / 5) * 9;
+
+            } else {
+                // even-positioned digits just contribute their ascii
+                // value minus 48
+                weight = digit;
+
+            }
+            // keep a running total of weights
+            sum += weight;
+        }
+
+        // avoid sum less than 10 (if characters below "0" allowed,
+        // this could happen)
+        sum = Math.abs(sum) + 10;
+
+        // check digit is amount needed to reach next number
+        // divisible by ten
+        return (10 - (sum % 10)) % 10;
+    }
+}
